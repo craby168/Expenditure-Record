@@ -1,0 +1,13 @@
+{
+  "name": "if-expense-records",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "如果建築師事務所支出憑證紀錄原型",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "build": "node prepare-static.mjs"
+  },
+  "engines": { "node": ">=20" }
+}

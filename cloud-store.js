@@ -1,0 +1,39 @@
+import {newId,now,payloadOf,validateRecord,MAX_FILE_SIZE} from './store.js';
+const SESSION_KEY='if-expense-cloud-session';
+export function validateConfig(url,key){
+  let u;try{u=new URL(url);}catch{throw new Error('請輸入 Supabase 專案網址');}
+  if(u.protocol!=='https:'||u.username||u.password||u.search||u.hash||u.pathname!=='/')throw new Error('請使用 HTTPS Supabase 專案根網址');
+  if(!key||key.length<20)throw new Error('請填寫公開 anon／publishable key');
+  if(key.startsWith('sb_secret_'))throw new Error('不能在瀏覽器使用 secret key');
+  if(key.split('.').length===3){try{const p=JSON.parse(atob(key.split('.')[1].replaceAll('-','+').replaceAll('_','/')));if(p.role!=='anon')throw new Error('bad-role');}catch{throw new Error('請使用 anon key，不能使用 service_role 或管理金鑰');}}
+  else if(!key.startsWith('sb_publishable_'))throw new Error('請使用 anon 或 publishable key');
+  return {url:u.origin,key};
+}
+export class CloudStore{
+  mode='cloud';
+  constructor(config){this.config=validateConfig(config.url,config.key);this.docs=new Map();}
+  async init(){try{const session=JSON.parse(sessionStorage.getItem(SESSION_KEY)||'null');if(session?.project===this.config.url){this.session=session;await this.loadProfile();}}catch{this.session=null;sessionStorage.removeItem(SESSION_KEY);}return this;}
+  async login(email,password){const r=await fetch(`${this.config.url}/auth/v1/token?grant_type=password`,{method:'POST',headers:{apikey:this.config.key,'Content-Type':'application/json'},body:JSON.stringify({email,password})});const j=await r.json();if(!r.ok)throw new Error('登入失敗，請確認帳號、密碼與帳號是否已受邀。');this.setSession(j);try{await this.loadProfile();}catch(e){await this.logout();throw e;}return this.profile;}
+  setSession(s){this.session={...s,project:this.config.url,expires_at:s.expires_at||Math.floor(Date.now()/1000)+s.expires_in};sessionStorage.setItem(SESSION_KEY,JSON.stringify(this.session));}
+  async ensureSession(){if(!this.session)throw new Error('請先登入');if(this.session.expires_at<Date.now()/1000+60){const r=await fetch(`${this.config.url}/auth/v1/token?grant_type=refresh_token`,{method:'POST',headers:{apikey:this.config.key,'Content-Type':'application/json'},body:JSON.stringify({refresh_token:this.session.refresh_token})});if(!r.ok){this.session=null;sessionStorage.removeItem(SESSION_KEY);throw new Error('登入已到期，請重新登入');}this.setSession(await r.json());}}
+  async api(path,{method='GET',body,headers={}}={}){await this.ensureSession();const r=await fetch(`${this.config.url}${path}`,{method,headers:{apikey:this.config.key,Authorization:`Bearer ${this.session.access_token}`,...(body&&!(body instanceof Blob)?{'Content-Type':'application/json'}:{}),...headers},body:body instanceof Blob?body:body?JSON.stringify(body):undefined});if(!r.ok){let j;try{j=await r.json();}catch{}throw new Error(j?.message||j?.error_description||`雲端請求失敗 (${r.status})`);}if(r.status===204||r.headers.get('content-length')==='0')return null;const text=await r.text();return text?JSON.parse(text):null;}
+  async loadProfile(){const user=await this.api('/auth/v1/user');const rows=await this.api(`/rest/v1/profiles?id=eq.${encodeURIComponent(user.id)}&select=id,role,display_name`);if(!rows?.length||!['manager','employee'].includes(rows[0].role))throw new Error('此帳號尚未取得系統角色，請聯絡管理者。');this.profile={...rows[0],email:user.email};return this.profile;}
+  async logout(){try{if(this.session)await this.api('/auth/v1/logout',{method:'POST'});}catch{}this.session=null;this.profile=null;sessionStorage.removeItem(SESSION_KEY);}
+  managerOnly(){if(this.profile?.role!=='manager')throw new Error('此功能僅供管理者使用');}
+  async listRecords(){this.managerOnly();let rows=[],offset=0;while(true){const batch=await this.api(`/rest/v1/records?select=*&order=created_at.desc&limit=500&offset=${offset}`);rows.push(...batch);if(batch.length<500)break;offset+=500;}let docs=[],dOffset=0;while(true){const batch=await this.api(`/rest/v1/documents?select=*&order=created_at.asc&limit=500&offset=${dOffset}`);docs.push(...batch);if(batch.length<500)break;dOffset+=500;}this.docs=new Map(docs.map(d=>[d.id,d]));return rows.map(r=>({...r.payload,id:r.id,version:r.version,createdAt:r.created_at,updatedAt:r.updated_at,createdBy:r.created_by,documents:docs.filter(d=>d.record_id===r.id).map(d=>({id:d.id,recordId:d.record_id,filename:d.filename,mime:d.mime,sizeBytes:d.size_bytes,sha256:d.sha256,objectPath:d.object_path}))}));}
+  async getDocument(id){this.managerOnly();let d=this.docs.get(id);if(!d){const rows=await this.api(`/rest/v1/documents?id=eq.${encodeURIComponent(id)}&select=*`);d=rows?.[0];}if(!d)throw new Error('找不到附件');await this.ensureSession();const r=await fetch(`${this.config.url}/storage/v1/object/authenticated/evidence/${d.object_path.split('/').map(encodeURIComponent).join('/')}`,{headers:{apikey:this.config.key,Authorization:`Bearer ${this.session.access_token}`}});if(!r.ok)throw new Error('附件尚未完成上傳或無存取權限');return {id:d.id,filename:d.filename,mime:d.mime,sizeBytes:d.size_bytes,sha256:d.sha256,recordId:d.record_id,blob:await r.blob()};}
+  async saveRecord(record,attachments=[],expectedVersion=null){
+    validateRecord(record);if(!this.profile)throw new Error('請先登入');if(expectedVersion!==null)this.managerOnly();if(expectedVersion===null&&!attachments.length)throw new Error('每筆紀錄至少需要一份附件');
+    for(const a of attachments){if(!a.file?.size||a.file.size>MAX_FILE_SIZE)throw new Error('附件必須是 1 byte 到 25 MB 的非空檔案');}
+    if(attachments.length&&record.status==='reviewed')throw new Error('新增附件前，請先填寫修改原因並將紀錄退回待檢閱');
+    const payload={...payloadOf(record),uploadState:attachments.length?'uploading':record.uploadState||'complete'};
+    if(expectedVersion===null){payload.status='pending';await this.api('/rest/v1/records',{method:'POST',headers:{Prefer:'return=minimal'},body:{id:record.id,payload,created_by:this.profile.id,version:1}});}
+    else{const updated=await this.api(`/rest/v1/records?id=eq.${record.id}&version=eq.${expectedVersion}`,{method:'PATCH',headers:{Prefer:'return=representation'},body:{payload,version:expectedVersion+1}});if(!updated?.length)throw new Error('這筆資料已被更新，請重新開啟後再修改。');}
+    try{for(const a of attachments){if(a.file.size>MAX_FILE_SIZE)throw new Error('附件超過 25 MB');const id=a.id||newId();const path=`${this.profile.id}/${record.id}/${id}`;const meta={id,record_id:record.id,object_path:path,filename:a.filename||a.file.name,mime:a.mime||a.file.type||'application/octet-stream',size_bytes:a.file.size,sha256:a.sha256,created_by:this.profile.id};await this.api('/rest/v1/documents',{method:'POST',headers:{Prefer:'return=minimal'},body:meta});await this.ensureSession();const upload=await fetch(`${this.config.url}/storage/v1/object/evidence/${path}`,{method:'POST',headers:{apikey:this.config.key,Authorization:`Bearer ${this.session.access_token}`,'Content-Type':meta.mime,'x-upsert':'false'},body:a.file});if(!upload.ok)throw new Error(`附件「${meta.filename}」未完成上傳`);}
+      if(attachments.length)await this.api('/rest/v1/rpc/finalize_submission',{method:'POST',body:{p_record_id:record.id}});
+    }catch(e){throw new Error(`紀錄已建立／更新，但附件未完成。請勿重複送出；請將紀錄編號 ${record.id} 交給管理者處理。原因：${e.message}`);}
+    return {...record,version:(expectedVersion||0)+1+(attachments.length?1:0),createdAt:record.createdAt||now(),updatedAt:now(),uploadState:attachments.length?'complete':payload.uploadState};
+  }
+  async exportBackup(){this.managerOnly();const records=await this.listRecords();const documents=[];for(const r of records)for(const d of r.documents){const full=await this.getDocument(d.id);const b=new Uint8Array(await full.blob.arrayBuffer());let s='';for(let i=0;i<b.length;i+=32768)s+=String.fromCharCode(...b.subarray(i,i+32768));documents.push({...d,base64:btoa(s)});}return {format:'if-expense-backup',schemaVersion:1,exportedAt:now(),mode:'cloud',records,documents};}
+  async listAudit(recordId){this.managerOnly();return this.api(`/rest/v1/audit_events?record_id=eq.${recordId}&select=*&order=at.desc&limit=100`);}
+}
