@@ -1,0 +1,31 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 100
+    environment:
+      APP_PUBLIC_ORIGIN: ${APP_PUBLIC_ORIGIN:?Set the public HTTPS origin in .env}
+      APP_DATA_DIR: /data
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8080"
+      APP_DEV_LOCALHOST: "0"
+      APP_SESSION_IDLE_SECONDS: ${APP_SESSION_IDLE_SECONDS:-1800}
+      APP_SESSION_MAX_SECONDS: ${APP_SESSION_MAX_SECONDS:-43200}
+    ports:
+      - "${HOST_BIND:-127.0.0.1}:${HOST_PORT:-8080}:8080"
+    volumes:
+      - "${DATA_DIR:-./nas-data}:/data"
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

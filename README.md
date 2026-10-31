@@ -1,96 +1,74 @@
-# 支出憑證紀錄系統
+# 支出憑證紀錄系統 v1.0
 
-Standalone expenditure prototype for 如果建築師事務所. This project is independent of IF_ERP. Prepared 31 October 2026, Asia/Taipei.
+如果建築師事務所的支出憑證管理工具。繁體中文、手機與桌面響應式介面。
 
-## Start the prototype
+- [使用手冊（繁體中文）](docs/使用手冊-v1.0.md)
+- [給後續 AI／公司維護者的交接](docs/AI部署交接-v1.0.md)
+- [稅務適用身分補充](docs/tax-profile-addendum.md)
 
-Install Node.js, open this folder in a terminal, and run:
+## 分支與架構
+
+`prototype` 保存 IndexedDB 示範版；`v1.0` 使用 Python 後端、SQLite 及伺服器私有原始附件，所有正式操作必須以實際帳號登入。前端透過同源 /api 呼叫後端，session 使用 HttpOnly cookie，變更請求需要 CSRF token。employee 僅能送出支出；manager 可查詢、檢閱、修改及匯出。帳號管理僅透過受信任的伺服器 CLI。
+
+原型的 Node server.mjs、Supabase schema／adapter 與相關測試保留供歷史參考，**不是 v1.0 的啟動或部署方式**。v1.0 不會讀取或自動上傳瀏覽器原型資料。靜態前端單獨發布也不能取代後端。
+
+## NAS 部署
+
+需要支援 Docker Compose 的 NAS（或相容 Python 及 SQLite 的主機）。實際 NAS、網域、憑證、volume 權限與帳號需由公司端配置。開發機測試不代表 NAS 實機部署驗收。
+
+1. 取得 v1.0 分支，複製 .env.example 為 .env。
+2. 設定 APP_PUBLIC_ORIGIN 為正式 HTTPS origin，設定 NAS 持久資料掛載位置，並預先讓 UID/GID 10001 可讀寫該目錄。正式環境不要開啟 APP_DEV_LOCALHOST。
+3. 執行 docker compose up -d --build。
+4. 建立管理者帳號：
+   `docker compose exec app python -m backend.app create-user --email manager@example.com --name 管理者 --role manager`
+   系統會互動詢問密碼，沒有預設帳密。密碼至少 12 字元。
+5. 以相同方式建立 employee 帳號。只有獲授權維護者可以執行 CLI。
+6. 設定 NAS HTTPS 反向代理到容器服務，配置請求大小、來源及逾時，再以實際帳號驗收。
+
+資料與附件保存在持久資料目錄；不可將此目錄設成公開網頁目錄。SQLite 放在單一 NAS 主機本地磁碟 volume，不以 SMB/NFS 讓多台應用程式共用即時資料庫。NAS 必須持續運作才能存取服務。
+
+## 同機開發
+
+Python 3.12+，無額外 Python 套件。PowerShell 範例：
 
 ```powershell
-node server.mjs
+$env:APP_DEV_LOCALHOST = '1'
+$env:APP_HOST = '127.0.0.1'
+$env:APP_PORT = '8080'
+$env:APP_PUBLIC_ORIGIN = 'http://127.0.0.1:8080'
+python -m backend.app create-user --email manager@example.com --name 測試管理者 --role manager
+python -m backend.app serve
 ```
 
-Open **http://127.0.0.1:4175** in the same computer's browser. The preview binds only to loopback. The responsive interface supports phone-sized screens; testing on an actual phone requires an HTTPS-hosted copy or a deliberately configured development-network preview. The PC preview URL is not reachable from a phone by typing its own localhost.
+再開啟 http://127.0.0.1:8080 。開發設定僅限同機測試。建立帳號及啟動服務必須使用同一個 APP_DATA_DIR。
 
-The builtless application requires no npm dependencies. The supplied company JPG is preserved in `assets/company-logo.jpg`. The logo contains white space and print marks; it can be replaced later with an approved clean logo file.
+## 維護 CLI
 
-## Confirmed implementation scope
-
-- Traditional Chinese application, expenditure recording only, fewer than five initial users.
-- Mobile camera/files and scanned evidence; preserve originals and show previews where supported. HEIC and other unsupported browser formats must remain downloadable without inventing a preview.
-- Amount, currency, vendor, document date/type/number, purpose, category and supporting notes; upload, search, review, correction history and expenditure dashboard.
-- Employee role submits evidence and receives confirmation, without the expenditure register, dashboard or exports. Manager handles finance views and accountant reports. A trusted accountant can be provisioned as a manager for this single practice.
-- On-demand accountant CSV and portable backups; revised records retain history and a correction reason.
-- Income, payment reconciliation, payroll, full ledger, project accounting and final financial statements are later scope. The accountant prepares authoritative statements elsewhere.
-- Tax profile remains unconfirmed. Architectural professional practices may fall under 執行業務者. Do not apply the initial ordinary-business tax proposal automatically.
-
-## Modes and honest limitations
-
-**Local prototype:** records and original file bytes live in this browser's IndexedDB. Demo manager/employee switching illustrates the screens; it is not authentication or access security. Anyone using that browser profile can switch demo roles or inspect its local database. Data does not automatically synchronize to another device, survive browser-data removal, or reach the NAS. Use non-sensitive test records and download a backup to preserve tests.
-
-**Cloud connection:** the optional Supabase adapter uses real email/password authentication and database-enforced roles. It needs a project URL and public publishable/anon key, plus the schema and provisioned accounts described below. No cloud tenant, paid service or real account has been created by this prototype. Until credentials exist, shared-device cloud functionality and live RLS are not verified. Never paste service-role, secret, database-password or OCR vendor keys into the application.
-
-**OCR:** capture works with manual confirmation. Cloud OCR is not configured and must not fabricate extraction results. Choose and benchmark a provider later; secrets belong in a server-side function. Preserve the source, provider/version and confidence separately, and require human confirmation. A future local OCR adapter can replace the cloud provider for more private processing.
-
-The local backup is a portable snapshot including file data, not an immutable regulatory archive. Cloud audit snapshots are created by database triggers; user-entered history is additional context rather than proof of authorization. No tax return, tax credit or deduction certification is produced.
-
-## Suggested hosting and current budget
-
-For the first shared pilot: host the static interface on Cloudflare Pages and use Supabase Free for Auth/Postgres/private evidence. This avoids dependence on an always-on office PC. It is a cloud service even though it does not require your own server.
-
-Official pricing checked 31 October 2026:
-
-| Component | Current option | Limits / consequence |
-|---|---|---|
-| Static interface | Cloudflare Pages static requests are free and unlimited | Dynamic functions have separate quotas. Publish only web assets, not SQL, backups or internal documents. |
-| Auth + database + files | Supabase Free: 500 MB DB, 1 GB file storage, 5 GB egress | Can pause after one week of inactivity. Free does not include automatic backups. Full-resolution phone photos may fill file storage quickly. |
-| Paid Supabase | Pro starts US$25/month | Exceeds the requested under-US$10 monthly target. Do not upgrade automatically. |
-| Future lower-cost storage | Cloudflare R2 plus an authenticated server adapter, or company NAS | Not implemented as a second storage adapter in this prototype. Requires access-control, backup and restore verification; prices depend on usage. |
-| OCR | Unconfigured | Processing is an additional cost, not included in the hosting estimate. |
-
-Sources: [Supabase pricing](https://supabase.com/pricing), [Pages pricing](https://developers.cloudflare.com/pages/functions/pricing/), [R2 pricing](https://developers.cloudflare.com/r2/pricing/).
-
-The proposed starting service bill can be US$0 within quotas, but long-term production operation under US$10 is not guaranteed by the Free tier. Monitor storage and export to NAS; do not delete the online original just because a backup exists without an approved archive/retrieval plan. Production host selection remains a decision after prototype testing.
-
-## Set up a dedicated Supabase pilot
-
-1. Create a dedicated project owned by the company/project owner. Choose the region and review service processing/privacy terms.
-2. Run `supabase/schema.sql` once in the project's SQL editor as its owner. It is a fresh-install schema, not an upgrade migration for an existing system.
-3. Disable public sign-up in Auth. Create/invite named test users from the trusted Auth dashboard, then provision their profile rows using the SQL below. No browser may promote its own role.
-4. Enter the project HTTPS URL and **public** publishable/anon key in the application's cloud settings. Login using a provisioned account. The public key is intentionally not a database administrator credential; RLS enforces access.
-5. Configure Auth's allowed site URLs for the hosted HTTPS origin. Use a dedicated test tenant and sample documents first.
-6. Execute the role, upload-failure and concurrency checks in `supabase/ACCEPTANCE.md` before enabling real staff uploads. Recheck configuration with Supabase's security advisor.
-
-Provision profiles using UUIDs copied from Auth, via SQL editor only:
-
-```sql
-insert into public.profiles(id,role,display_name) values
-  ('REPLACE_WITH_AUTH_USER_UUID','manager','管理者');
--- Additional users: role 'employee'; an authorized accountant can use 'manager'.
--- Revoke membership through trusted administration:
--- update public.profiles set active=false where id='USER_UUID';
+```text
+python -m backend.app list-users
+python -m backend.app reset-password --email USER_EMAIL
+python -m backend.app disable-user --email USER_EMAIL
+python -m backend.app enable-user --email USER_EMAIL
+python -m backend.app set-role --email USER_EMAIL --role employee
 ```
 
-The browser uses these tables: `profiles`, `records` (payload plus server version), `documents` (private original-file metadata) and `audit_events` (server snapshots). No DELETE access is granted to application users. Private evidence objects cannot be overwritten. Employees have INSERT access for their pending submission and evidence, but no SELECT access to expense records or documents. Managers have read/update privileges, not role administration.
+密碼預設透過 getpass 輸入；--password-stdin 只供安全本機自動化，不能將密碼寫入 Git 或命令列。關閉或重設帳號後，需驗證舊 session 已失效。
 
-Upload sequence: create pending/uploading record, insert metadata, upload each private original, then invoke `finalize_submission`. Finalization verifies all declared objects exist before setting complete. A failed upload remains visibly incomplete for manager follow-up. The storage policy requires matching metadata and owner/path. Optimistic updates use `id` plus expected `version`; a stale update must fail rather than overwrite another reviewer. A reviewed record requires a correction reason before revision.
+## 測試
 
-Reference: [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [private storage policies](https://supabase.com/docs/guides/storage/security/access-control).
+```text
+node --test tests/domain.test.mjs tests/cloud-contract.test.mjs
+python -m unittest backend.test_backend -v
+```
 
-## NAS and privacy transition
+後端測試以臨時資料與實際 HTTP 驗證登入、角色、CSRF、附件、版本衝突及持久化。Docker/NAS 實機、TLS 反向代理、手機相機及公司備份排程，仍需在部署環境驗收。
 
-The NAS is initially a backup destination, not a prerequisite for the running interface. After prototype acceptance, select either cloud primary + NAS backup, or NAS-hosted application/data over the company's approved network/VPN. If data moves onto the NAS, the NAS must be available whenever users access it. A cloud database cannot make offline NAS files accessible.
+## 資料與備份
 
-For local testing, export a full backup including evidence and copy it to a restricted NAS folder. Confirm restore in a separate test browser before relying on it. Do not place financial exports in a public shared folder.
+上傳成功才代表後端已儲存該筆與全部附件。上限為每份 25 MB、每次最多 20 份新附件，整筆原始附件總量另有限制。介面提供 CSV 及包含原始附件的 JSON 交付快照；完整災難復原需要一致性備份整個持久資料目錄。建議停機備份後重新啟動，並在隔離環境驗證還原。勿將運作中的 SQLite 單檔複製當成已驗證備份。
 
-For a cloud deployment, schedule both database export and private-file copies from a trusted machine/NAS task. Browser export is on demand and does not itself meet a daily automatic-backup objective. Keep backup credentials outside web assets. Encrypt/restrict backups, record file hashes and run a restore drill; align database snapshots and file copies. Adopt the one-day RPO/one-business-day RTO only after this process has been demonstrated. This prototype has not scheduled a NAS task or accessed the company's NAS.
+程式碼、.env、資料庫及備份分開；機密與正式資料不得提交 Git。此交付未建立公司 NAS 帳號、未存取公司 NAS、未安排公司備份工作。
 
-## Tax and accountant notes
+## 範圍
 
-The revised professional-practice memo is in `docs/tax-profile-addendum.md`. The tax profile, accounting basis, withholding-unit registration and deductions await accountant confirmation. Restaurant receipts need business context; fuel needs business use and evidence; foreign software can need additional review. A recorded or manager-reviewed expense is not a tax-authority-approved deduction.
-
-Keep original paper evidence under the practice's existing custody process. Uploaded images do not authorize destruction. Payment evidence/dates may still be requested by the accountant even though payment reconciliation is outside MVP. The expenditure dashboard does not calculate net profit, annual entertainment limits or complete financial statements.
-
-## Prototype acceptance
-
-Test employee upload-only view; manager filtering and totals by currency; original-byte download; multi-attachment capture; duplicate warnings; review and correction reason/history; CSV literal safety; backup/restore with files; mobile layout; reload persistence; and cloud RLS checks when a tenant is configured. See `QA.md` for the verification actually performed and remaining limits.
+已收錄支出、附件、分類、用途、管理者檢閱、更正歷程及匯出。OCR 尚未配置，採手動填寫；收入、付款對帳、薪資計算、正式財務報表、稅額／扣抵認定與郵件密碼復原不在本版。請參閱使用手冊與 AI 交接文件完成公司端設定。
